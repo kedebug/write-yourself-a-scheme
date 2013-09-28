@@ -12,7 +12,7 @@ main = do
     args <- getArgs
     case length args of
         0 -> runRepl
-        1 -> evalAndPrint $ args !! 0
+        1 -> runOne $ args !! 0 
         otherwise -> putStrLn "Program take 0 or 1 argument"
 
 readExpr :: String -> ThrowsError LispVal
@@ -96,15 +96,16 @@ instance Show LispVal where
 eval :: Env -> LispVal -> IOThrowsError LispVal
 eval env val@(String _) = return val
 eval env val@(Number _) = return val
-eval env val@(Bool _)   = return val
+eval env val@(Bool _) = return val
+eval env (Atom id) = getVar env id
 eval env (List [Atom "quote", x]) = return x
 eval env (List [Atom "if", pred, conseq, alt]) = do
     result <- eval env pred
     case result of
         Bool True -> eval env conseq
         otherwise -> eval env alt
-eval env (List [Atom "set!", Atom var, form] = eval env form >>= setVar env var
-eval env (List [Atom "define", Atom var, form] = eval env form >>= defineVar env var
+eval env (List [Atom "set!", Atom var, form]) = eval env form >>= setVar env var
+eval env (List [Atom "define", Atom var, form]) = eval env form >>= defineVar env var
 eval env (List ((Atom func) : args)) = mapM (eval env) args >>= liftThrows . apply func 
 eval env badForm = throwError $ BadSpecialForm "Unrecognized special form" badForm
 
@@ -272,8 +273,11 @@ until_ pred prompt action = do
         True -> return ()
         False -> action str >> until_ pred prompt action 
 
+runOne :: String -> IO ()
+runOne expr = nullEnv >>= flip evalAndPrint expr
+
 runRepl :: IO ()
-runRepl = until_ (== "quit") (readPrompt "lisp>>> ") evalAndPrint
+runRepl = nullEnv >>= until_ (== "quit") (readPrompt "lisp>>> ") . evalAndPrint
 
 type Env = IORef [(String, IORef LispVal)]
 
@@ -304,7 +308,8 @@ setVar envRef var value = do
     env <- liftIO $ readIORef envRef
     case lookup var env of
         Nothing -> throwError $ UnboundVar "Getting an unbound variable " var
-        Just ref -> liftIO $ writeIORef ref value 
+        Just ref -> liftIO $ writeIORef ref value
+    return value
 
 defineVar :: Env -> String -> LispVal -> IOThrowsError LispVal
 defineVar envRef var value = do
@@ -314,11 +319,12 @@ defineVar envRef var value = do
         else liftIO $ do
             valueRef <- newIORef value
             env <- readIORef envRef
-            writeIORef envRef ((var, valueRef) : envRef)
+            writeIORef envRef ((var, valueRef) : env)
             return value
 
 bindVars :: Env -> [(String, LispVal)] -> IO Env
-bindVars envRef bindings = readIORef envRef >>= extendEnv bindings >>= newIORef
+bindVars envRef bindings = 
+    readIORef envRef >>= extendEnv bindings >>= newIORef
   where
     extendEnv bindings env = liftM (++ env) $ mapM addBinding bindings
     addBinding (var, value) = do ref <- newIORef value
